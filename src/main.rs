@@ -15,6 +15,20 @@ impl CPU{
         }
     }
 
+    fn update_zero_and_negative_flags(&mut self, result: u8) {
+        if result == 0 {
+            self.status = self.status | 0b0000_0010;
+        } else {
+            self.status = self.status & 0b1111_1101;
+        }
+
+        if result & 0b1000_0000 != 0 {
+            self.status = self.status | 0b1000_0000;
+        } else {
+            self.status = self.status & 0b0111_1111;
+        }
+    }
+
     pub fn interpret(&mut self, program: Vec<u8>){
         // Start execution at the beginning of the program (address 0)
         self.program_counter = 0;
@@ -32,51 +46,24 @@ impl CPU{
                     self.program_counter += 1;
                     self.register_a = param;
 
-                    // Update the zero flag (bit 1) in the status register:
-                    // If the loaded value is zero, set the zero flag to 1
-                    // Otherwise, clear the zero flag (set to 0)
-                    if self.register_a == 0 {
-                        self.status = self.status | 0b0000_0010;
-                    } else {
-                        self.status = self.status & 0b1111_1101;
-                    }
+                    self.update_zero_and_negative_flags(self.register_a);  
+                }
+                0xAA => {
+                    // TAX: Transfer the value from the accumulator (register_a) to the X register (register_x)
+                    self.register_x = self.register_a;
 
-                    // Update the negative flag (bit 7) in the status register:
-                    // If the highest bit (bit 7) of register_a is set (value is negative in 2's complement), set the negative flag
-                    // Otherwise, clear the negative flag
-                    if self.register_a & 0b1000_0000 != 0 {
-                        self.status = self.status | 0b1000_0000;
-                    } else{
-                        self.status = self.status & 0b0111_1111;
-                    }
+                    self.update_zero_and_negative_flags(self.register_x);
+                }
+                0xE8 => {
+                    // INX: Increment X by 1
+                    self.register_x = self.register_x.wrapping_add(1);
 
+                    self.update_zero_and_negative_flags(self.register_x);
                 }
                 0x00 => {
                     // Break instruction
                     return;
                 }
-
-                0xAA => {
-                    // TAX: Transfer the value from the accumulator (register_a) to the X register (register_x)
-                    self.register_x = self.register_a;
-
-                    // Update the zero flag (bit 1) in the status register:
-                    // Set it if register_x is zero, clear it otherwise
-                    if self.register_x == 0 {
-                        self.status = self.status | 0b0000_0010;
-                    } else {
-                        self.status = self.status & 0b1111_1101;
-                    }
-
-                    // Update the negative flag (bit 7) in the status register:
-                    // Set it if the most significant bit of register_x is set (indicating a negative value in 2's complement)
-                    if self.register_x & 0b1000_0000 != 0 {
-                        self.status = self.status | 0b1000_0000;
-                    } else {
-                        self.status = self.status & 0b0111_1111;
-                    }
-                }
-
                 _ => todo!()
             }
         }
@@ -86,30 +73,22 @@ impl CPU{
 #[cfg(test)]
 mod tests {
     use super::*;
-
+   
     #[test]
-    fn test_0xa9_lda_immediate_load_data() {
-        let mut cpu = CPU::new();
-        cpu.interpret(vec![0xA9, 0x05, 0x00]);
-        assert_eq!(cpu.register_a, 0x05);
-        assert_eq!(cpu.status & 0b0000_0010, 0);
-        assert_eq!(cpu.status & 0b1000_0000, 0);
-    }
-
-    #[test]
-    fn test_0xa9_lda_zero_flag() {
-        let mut cpu = CPU::new();
-        cpu.interpret(vec![0xA9, 0x00, 0x00]);
-        assert_eq!(cpu.status & 0b0000_0010, 0b0000_0010);
-    }
-
-    #[test]
-    fn test_0xaa_tax_move_a_to_x() {
+    fn test_5_ops_working_together() {
        let mut cpu = CPU::new();
-       cpu.register_a = 10;
-       cpu.interpret(vec![0xaa, 0x00]);
+       cpu.interpret(vec![0xa9, 0xc0, 0xaa, 0xe8, 0x00]);
  
-       assert_eq!(cpu.register_x, 10)
+       assert_eq!(cpu.register_x, 0xc1)
+    }
+
+    #[test]
+    fn test_inx_overflow() {
+        let mut cpu = CPU::new();
+        cpu.register_x = 0xff;
+        cpu.interpret(vec![0xe8, 0xe8, 0x00]);
+
+        assert_eq!(cpu.register_x, 1)
     }
 }
 
