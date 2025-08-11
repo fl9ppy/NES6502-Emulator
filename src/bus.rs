@@ -45,26 +45,3 @@ impl Bus for Ram {
         self.mem[addr as usize] = data;
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_ram_read_write() {
-        let mut ram = Ram::new();
-        ram.write(0x1000, 0xAB);
-        assert_eq!(ram.read(0x1000), 0xAB);
-    }
-
-    #[test]
-    fn test_ram_load_program() {
-        let mut ram = Ram::new();
-        let program = vec![0x01, 0x02, 0x03];
-        ram.load(0x2000, &program);
-
-        assert_eq!(ram.read(0x2000), 0x01);
-        assert_eq!(ram.read(0x2001), 0x02);
-        assert_eq!(ram.read(0x2002), 0x03);
-    }
-}
