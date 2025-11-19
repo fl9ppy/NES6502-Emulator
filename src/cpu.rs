@@ -18,6 +18,10 @@ pub struct CPU {
  
     /// Program counter (PC), points to the next instruction address.
     pub program_counter: u16,
+
+    /// Stack Pointer (SP), points to the current top of the stack (0x0100-0x01FF).
+    /// Stack grows downward; used by PHA/PLA/JSR/RTS/RTI/PHP/PLP instructions.
+    pub stack_pointer: u8,
 }
 
 impl CPU { 
@@ -28,9 +32,51 @@ impl CPU {
             register_x: 0,
             status: 0,
             program_counter: 0,
+            stack_pointer: 0xFD,
         }
     }
  
+    /// Computes the absolute memory address of the stack location pointed by 'stack_pointer'.
+    /// Stack resides in page 0x0100 (0x0100 - 0x01FF).
+    fn stack_address(&self) -> u16 {
+        0x0100 | self.stack_pointer as u16 
+    }
+    
+    /// Pushes a byte onto the stack.
+    /// Decrements `stack_pointer` after writing (stack grows downward).
+    pub fn push_byte(&mut self, bus: &mut impl Bus, value: u8){
+        let addr = self.stack_address();
+        bus.write(addr, value);
+        self.stack_pointer = self.stack_pointer.wrapping_sub(1) // wrap-around at 0x00 -> 0xFF
+    }
+
+    /// Pops a byte from the stack.
+    /// Increments `stack_pointer` before reading.
+    pub fn pop_byte(&mut self, bus: &mut impl Bus) -> u8 {
+        self.stack_pointer = self.stack_pointer.wrapping_add(1); // wrap-around at 0xFF -> 0x00
+        let addr = self.stack_address();
+        bus.read(addr)
+    }
+
+    /// Pushes a 16-bit value onto the stack.
+    /// High byte is pushed first, then low byte.
+    /// Used by JSR and interrupt routines.
+    pub fn push_word(&mut self, bus: &mut impl Bus, value: u16) {
+        let high = (value >> 8) as u8;
+        let low = (value & 0xFF) as u8;
+        self.push_byte(bus, high);
+        self.push_byte(bus, low);
+    }
+
+    /// Pops a 16-bit value from the stack.
+    /// Low byte is popped first, then high byte.
+    /// Used by RTS and RTI instructions.
+    pub fn pop_word(&mut self, bus: &mut impl Bus) -> u16 {
+        let low = self.pop_byte(bus) as u16;
+        let high = self.pop_byte(bus) as u16;
+        (high << 8) | low
+    }
+
     /// Updates the zero and negative flags based on the `result` byte.
     /// - Zero flag is set if `result` is zero.
     /// - Negative flag is set if the most significant bit (bit 7) is set.
@@ -158,6 +204,45 @@ impl CPU {
                 0x00 => {
                     // BRK: Break / stop execution
                     return;
+                }
+                0x48 => {
+                // PHA: Push accumulator to stack
+                    self.push_byte(bus, self.register_a);
+                    self.program_counter = self.program_counter.wrapping_add(1);
+                },
+                0x68 => {
+                    // PLA: Pull accumulator from stack
+                    self.register_a = self.pop_byte(bus);
+                    self.update_zero_and_negative_flags(self.register_a);
+                    self.program_counter = self.program_counter.wrapping_add(1);
+                },
+                0x08 => {
+                    // PHP: Push processor status to stack (set B flag + unused)
+                    self.push_byte(bus, self.status | 0b0011_0000);
+                    self.program_counter = self.program_counter.wrapping_add(1);
+                },
+                0x28 => {
+                    // PLP: Pull processor status from stack
+                    self.status = self.pop_byte(bus);
+                    self.program_counter = self.program_counter.wrapping_add(1);
+                },
+                0x20 => {
+                    // JSR Absolute: Jump to subroutine
+                    let lo = bus.read(self.program_counter.wrapping_add(1)) as u16;
+                    let hi = bus.read(self.program_counter.wrapping_add(2)) as u16;
+                    let addr = (hi << 8) | lo;
+                    // Push return address (PC + 2) onto stack
+                    self.push_word(bus, self.program_counter.wrapping_add(2));
+                    self.program_counter = addr;
+                },
+                0x60 => {
+                    // RTS: Return from subroutine
+                    self.program_counter = self.pop_word(bus).wrapping_add(1);
+                },
+                0x40 => {
+                    // RTI: Return from interrupt
+                    self.status = self.pop_byte(bus);          // Restore status flags
+                    self.program_counter = self.pop_word(bus); // Restore PC
                 }
                 _ => panic!("Opcode {:#x} not implemented", opcode),
             }
