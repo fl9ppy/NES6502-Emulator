@@ -1,5 +1,9 @@
 use crate::bus::Bus;
 
+const NMI_VECTOR: u16 = 0xFFFA;
+const RESET_VECTOR: u16 = 0xFFFC;
+const IRQ_VECTOR: u16 = 0xFFFE;
+
 /// The CPU struct represents the central processing unit.
 /// It holds registers and status flags required for execution.
 pub struct CPU {
@@ -22,6 +26,10 @@ pub struct CPU {
     /// Stack Pointer (SP), points to the current top of the stack (0x0100-0x01FF).
     /// Stack grows downward; used by PHA/PLA/JSR/RTS/RTI/PHP/PLP instructions.
     pub stack_pointer: u8,
+
+    /// Pending interrupt requests (NMI cannot be masked, IRQ can be).
+    pub nmi_pending: bool,
+    pub irq_pending: bool,
 }
 
 impl CPU { 
@@ -35,7 +43,37 @@ impl CPU {
             stack_pointer: 0xFD,
         }
     }
- 
+    
+    /// Requests a maskable interrupt (IRQ). Ignored if I flag is set.
+    pub fn trigger_irq(&mut self) {
+        self.irq_pending = true;
+    }
+
+    /// Handles an interrupt by pushing PC and status, clearing the break bit,
+    /// and loading a new PC from the interrupt vector.
+    fn handle_interrupt(&mut self, bus: &mut impl Bus, vector: u16){
+        // Push PC onto stack (high, then low)
+        let pc = self.program_counter;
+        self.push_word(bus, pc);
+
+        // Push status (B flag cleared on actual interrupts) 
+        let flags = self.status & 0b1110_1111; // Clear B flag
+        self.push_byte(bus, flags);
+
+        // Set interrupt disable flag
+        self.status |= 0b0000_0100;
+
+        // Load new PC from vector
+        let lo = bus.read(vector) as u16;
+        let hi = bus.read(vector + 1) as u16;
+        self.program_counter = (hi << 8) | lo;
+    }
+
+    /// Requests a non-maskable interrupt (NMI). Always taken.
+    pub fn trigger_nmi(&mut self) {
+        self.nmi_pending = true
+    }
+
     /// Computes the absolute memory address of the stack location pointed by 'stack_pointer'.
     /// Stack resides in page 0x0100 (0x0100 - 0x01FF).
     fn stack_address(&self) -> u16 {
@@ -107,6 +145,15 @@ impl CPU {
     /// The CPU reads instructions from memory via the Bus trait interface.
     pub fn run(&mut self, bus: &mut impl Bus) {
         loop {
+            // Handle interrupts before executing next instruction
+            if self.nmi_pending = false;{
+                self.nmi_pending = false;
+                self.handle_interrupt(bus, NMI_VECTOR);
+            } else if self.irq_pending = false; {
+                self.irq_pending = false;
+                self.handle_interrupt(bus, IRQ_VECTOR);
+            }
+
             let opcode = bus.read(self.program_counter);
 
             match opcode {
@@ -202,8 +249,20 @@ impl CPU {
                     }
                 }
                 0x00 => {
-                    // BRK: Break / stop execution
-                    return;
+                    // BRK: Force interrupt
+                    self.program_counter = self.program_counter.wrapping_add(1);
+
+                    // Push PC and status (break flag set)
+                    self.push_word(bus, self.program_counter);
+                    self.push_byte(bus, self.status | 0b0001_0000);
+
+                    // Set interrupt disable
+                    self.status |= 0b0000_0100;
+
+                    // Jump to IRQ/BRK vector
+                    let lo = bus.read(IRQ_VECTOR) as u16;
+                    let hi = bus.read(IRQ_VECTOR + 1) as u16;
+                    self.program_counter = (hi << 8) | lo;
                 }
                 0x48 => {
                 // PHA: Push accumulator to stack
